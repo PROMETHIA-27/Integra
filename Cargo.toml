@@ -7,5 +7,5 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 bevy = "0.8"
 
-[profiles.dev-dependencies]
+[profiles.dev.package."*"]
 opt-level = 3

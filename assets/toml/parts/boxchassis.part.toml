@@ -1,0 +1,36 @@
+name = "Box Chassis"
+origin = [0, -15.5]
+direction = [0, 1]
+chassis = true
+
+[stats]
+hp = 50
+
+[sprite]
+type = "basic"
+path = "png/parts/boxchassis.png"
+
+[[hardpoints]]
+position = [-12, -10]
+direction = [-1, 0]
+order = 'above'
+
+[[hardpoints]]
+position = [12, -10]
+direction = [1, 0]
+order = 'above'
+
+[[hardpoints]]
+position = [-11, 7]
+direction = [-1, 0]
+order = 'below'
+
+[[hardpoints]]
+position = [11, 7]
+direction = [1, 0]
+order = 'below'
+
+[[hardpoints]]
+position = [0, 15]
+direction = [0, 1]
+order = 'above'

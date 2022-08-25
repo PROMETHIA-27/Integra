@@ -1,0 +1,45 @@
+name = "Box Head"
+origin = [0, -15]
+direction = [0, 1]
+
+[stats]
+hp = 25
+
+[sprite]
+type = "basic"
+path = "png/parts/recthead.png"
+
+[[hardpoints]]
+position = [-6, -10]
+direction = [-1, 0]
+order = 'above'
+
+[[hardpoints]]
+position = [-6, 0]
+direction = [-1, 0]
+order = 'above'
+
+[[hardpoints]]
+position = [-6, 10]
+direction = [-1, 0]
+order = 'above'
+
+[[hardpoints]]
+position = [6, -10]
+direction = [1, 0]
+order = 'above'
+
+[[hardpoints]]
+position = [6, 0]
+direction = [1, 0]
+order = 'above'
+
+[[hardpoints]]
+position = [6, 10]
+direction = [1, 0]
+order = 'above'
+
+[[hardpoints]]
+position = [0, 15]
+direction = [0, 1]
+order = 'above'

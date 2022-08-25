@@ -1,0 +1,23 @@
+name = "Blaster"
+origin = [0, -15.5]
+direction = [0, 1]
+hardpoints = []
+
+[stats]
+hp = 75
+
+[weapon]
+type = "projectile"
+damage = 25
+
+[weapon.projectile]
+sprite_path = "png/parts/blastershot.png"
+velocity = 500.0
+
+[sprite]
+type = "animation"
+
+[sprite.animation]
+type = "on shoot"
+idle = "png/parts/blaster0.png"
+sequence = ["png/parts/blaster1.png"]

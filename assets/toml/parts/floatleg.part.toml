@@ -1,0 +1,25 @@
+name = "Float Leg"
+origin = [-15, -8]
+direction = [1, 0]
+stay_upright = true
+hardpoints = []
+
+[stats]
+hp = 35
+speed = 15
+acceleration = 25
+force = 15
+
+[sprite]
+type = "animation"
+
+[sprite.animation]
+type = "on move"
+idle = "png/parts/floatleg0.png"
+sequence = [
+    "png/parts/floatleg1.png",
+    "png/parts/floatleg2.png",
+    "png/parts/floatleg3.png",
+    "png/parts/floatleg4.png",
+    "png/parts/floatleg5.png",
+]

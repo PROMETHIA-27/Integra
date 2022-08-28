@@ -654,18 +654,12 @@ impl<'w, 's> PartCommandsExt<'w, 's> for Commands<'w, 's> {
                         let mut next = world.entity_mut(next);
                         next.remove::<PlayerOwned>();
                         next.remove::<EnemyOwned>();
-                        next.get::<Children>()
-                            .map(|children| children.iter().for_each(|&c| stack.push(c)));
-                        next.get_mut::<CustomPhysicsData>().map(|mut physics| {
-                            physics.part_tree_root = Some(id);
-                            physics.disable_collision = false;
+                        next.get::<PartChildren>().map(|children| {
+                            children
+                                .iter()
+                                .filter_map(|&c| c)
+                                .for_each(|c| stack.push(c))
                         });
-
-                        next.get::<PartChildren>()
-                            .unwrap()
-                            .iter()
-                            .filter_map(|&c| c)
-                            .for_each(|c| stack.push(c));
                     }
                 }
 

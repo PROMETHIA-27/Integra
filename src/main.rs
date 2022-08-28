@@ -91,7 +91,8 @@ fn main() {
         .add_system_set(
             SystemSet::on_update(AppState::Running)
                 .label("preupdate")
-                .with_system(track_mouse_position),
+                .with_system(track_mouse_position)
+                .with_system(detach_distant_parts),
         )
         .add_system_set(
             SystemSet::on_update(AppState::Running)
@@ -102,7 +103,9 @@ fn main() {
                 .with_system(fire_player_weapons)
                 .with_system(track_grabby_hand_to_mouse)
                 .with_system(grab_parts)
-                .with_system(show_markers),
+                .with_system(show_markers)
+                .with_system(camera_track_player)
+                .with_system(fire_enemy_weapons),
         )
         .add_startup_system(setup.label("setup"))
         .run();
@@ -142,7 +145,7 @@ fn start_game(mut c: Commands, parts: Res<PartTable>) {
         .insert_bundle((
             Transform::from_xyz(0.0, 0.0, 0.0),
             ControllerSettings {
-                acceleration: 100.0,
+                acceleration: 20.0,
                 max_speed: 100.0,
                 max_acceleration_force: 100.0,
                 up_vector: Vec3::Y,
@@ -335,6 +338,73 @@ fn fire_player_weapons(
                         );
                         c.spawn_bundle(bundle);
                         *last_shot = Instant::now();
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn fire_enemy_weapons(
+    mut c: Commands,
+    player: Query<&GlobalTransform, With<Player>>,
+    enemies: Query<(Entity, &GlobalTransform), With<AggressiveAi>>,
+    mut parts: Query<(&GlobalTransform, &mut PartInfo, Option<&PartChildren>)>,
+) {
+    let player = match player.get_single() {
+        Ok(player) => player,
+        _ => return,
+    };
+
+    for (enemy, tf) in enemies.iter() {
+        if tf
+            .translation()
+            .truncate()
+            .distance_squared(player.translation().truncate())
+            >= 300.0f32.powf(2.0)
+        {
+            continue;
+        }
+
+        let mut stack = vec![enemy];
+        while !stack.is_empty() {
+            let next = stack.pop().unwrap();
+
+            let (tf, mut info, children) = match parts.get_mut(next) {
+                Ok(v) => v,
+                _ => continue,
+            };
+
+            match children {
+                Some(children) => stack.extend(children.iter().filter_map(|c| c.as_ref().cloned())),
+                _ => (),
+            }
+
+            if let Some(weapon) = &mut info.weapon {
+                match weapon {
+                    PartWeapon::Projectile {
+                        spread,
+                        projectile,
+                        cooldown,
+                        last_shot,
+                    } => {
+                        if last_shot.elapsed().as_secs_f32() >= *cooldown {
+                            let dir = (player.translation().truncate()
+                                - tf.translation().truncate())
+                            .extend(0.0);
+                            let spread = thread_rng()
+                                .gen_range(-*spread / 2.0..*spread / 2.0)
+                                .to_radians();
+                            let dir = Quat::from_axis_angle(Vec3::Z, spread) * dir;
+                            let bundle = WeaponProjectileBundle::new(
+                                enemy,
+                                projectile,
+                                tf.translation() - Vec3::Z,
+                                dir,
+                            );
+                            c.spawn_bundle(bundle);
+                            *last_shot = Instant::now();
+                        }
                     }
                 }
             }
@@ -565,4 +635,40 @@ fn show_markers(
             }
         }
     }
+}
+
+fn detach_distant_parts(
+    mut c: Commands,
+    part: Query<&GlobalTransform, With<PartDef>>,
+    joints: Query<(Entity, &ImpulseJoint, &GlobalTransform), With<PartDef>>,
+) {
+    for (id, joint, tf) in joints.iter() {
+        let tf2 = part.get(joint.parent).unwrap();
+
+        if tf.translation().distance_squared(tf2.translation()) > 200.0f32.powf(2.0) {
+            c.detach_part(id);
+        }
+    }
+}
+
+fn camera_track_player(
+    mut camera: Query<&mut Transform, With<MainCamera>>,
+    player: Query<&GlobalTransform, With<Player>>,
+) {
+    let mut camera = match camera.get_single_mut() {
+        Ok(cam) => cam,
+        _ => return,
+    };
+
+    let player = match player.get_single() {
+        Ok(player) => player,
+        _ => return,
+    };
+
+    let player_pos = player.translation().truncate();
+    let cam_pos = camera.translation.truncate();
+
+    let new_pos = cam_pos.lerp(player_pos, 0.95);
+
+    camera.translation = new_pos.extend(500.0);
 }

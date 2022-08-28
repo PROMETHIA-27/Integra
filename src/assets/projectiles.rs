@@ -6,7 +6,7 @@ use bevy::utils::Instant;
 use bevy_rapier3d::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::CustomPhysicsData;
+use crate::{CustomPhysicsData, Player};
 
 use super::parts::*;
 
@@ -96,6 +96,7 @@ fn apply_projectiles(
     mut collision_events: EventReader<CollisionEvent>,
     projectiles: Query<(Entity, &Projectile)>,
     mut parts: Query<(Entity, &mut PartStats)>,
+    player: Query<(), With<Player>>,
 ) {
     for event in collision_events.iter() {
         let (left, right) = match event {
@@ -123,7 +124,9 @@ fn apply_projectiles(
 
         stats.hp = stats.hp.saturating_sub(projectile.damage);
         if stats.hp == 0 {
-            c.despawn_part(part_id);
+            if !player.contains(part_id) {
+                c.despawn_part(part_id);
+            }
         }
     }
 }

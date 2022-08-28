@@ -6,7 +6,7 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 bevy_editor_pls = "0.1.1"
-bevy_mod_wanderlust = "0.2.0"
+bevy_mod_wanderlust = "0.2.2"
 serde = "1.0.144"
 toml = "0.5.9"
 bevy_rapier3d = { version = "0.16.2", features = ["debug-render"] }
@@ -20,7 +20,7 @@ features = [
   "bevy_asset",
   "bevy_scene",
   "bevy_winit",
-  # "dynamic",
+  "dynamic",
   "render",
   "png",
   "hdr",

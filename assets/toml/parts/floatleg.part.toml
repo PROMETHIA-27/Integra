@@ -7,7 +7,7 @@ hardpoints = []
 [stats]
 hp = 35
 speed = 30
-acceleration = 25
+acceleration = 5
 force = 25
 
 [sprite]

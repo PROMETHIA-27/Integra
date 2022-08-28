@@ -20,7 +20,6 @@ features = [
   "bevy_asset",
   "bevy_scene",
   "bevy_winit",
-  "dynamic",
   "render",
   "png",
   "hdr",

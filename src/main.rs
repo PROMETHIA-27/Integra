@@ -351,6 +351,7 @@ fn spawn_grabby_hand(mut c: Commands) {
         GlobalTransform::default(),
         RigidBody::KinematicPositionBased,
         GrabbyHand,
+        Name::from("Grabby Hand"),
     ));
 }
 

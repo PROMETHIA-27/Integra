@@ -73,16 +73,18 @@ fn spawn(
 
     timer.0 -= time.delta_seconds();
     if timer.0 <= 0.0 {
-        timer.0 = thread_rng().gen_range(10.0..=10.0 + 400.0 / score);
+        timer.0 = thread_rng().gen_range(15.0..=15.0 + 400.0 / score);
+        info!("Spawn timer reset to: {}", timer.0);
     } else {
         return;
     }
 
     let enemy_count = thread_rng().gen_range(1..=1 + (score / 50.0).floor() as usize);
+    let minimum = (score / 10.0) as usize;
+    let range = (score / 20.0) as usize;
+    info!("Part count stats: |Minimum: {minimum}| |Range: {range}|");
     for _ in 0..enemy_count {
-        let range = (score / 20.0) as usize;
-        let minimum = (score / 4.0) as usize;
-        let part_count = thread_rng().gen_range(minimum..minimum + range);
+        let part_count = thread_rng().gen_range(minimum..=minimum + range);
         let dir =
             Quat::from_axis_angle(Vec3::Z, thread_rng().gen_range(0.0..=std::f32::consts::TAU))
                 * Vec3::Y;

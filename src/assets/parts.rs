@@ -11,7 +11,7 @@ use bevy_rapier3d::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::utils::UtilCommandExt;
-use crate::{CustomPhysicsData, PlayerOwned, EnemyOwned};
+use crate::{CustomPhysicsData, EnemyOwned, PlayerOwned};
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Reflect, FromReflect)]
 pub enum Order {
@@ -230,6 +230,7 @@ pub struct PartBundle {
     pub gravity: GravityScale,
     pub damping: Damping,
     pub locked_axes: LockedAxes,
+    pub name: Name,
 }
 
 impl PartBundle {
@@ -273,7 +274,8 @@ impl PartBundle {
                 linear_damping: crate::DAMPING_FACTOR,
                 angular_damping: crate::DAMPING_FACTOR,
             },
-            locked_axes: LockedAxes::TRANSLATION_LOCKED_Z
+            locked_axes: LockedAxes::TRANSLATION_LOCKED_Z,
+            name: part.def.name.clone().into(),
         }
     }
 }
@@ -500,7 +502,7 @@ pub trait PartCommandsExt<'w, 's> {
     fn attach_part(&mut self, parent: Entity, part: Entity, hardpoint: usize) -> &mut Self;
 
     fn detach_part(&mut self, part: Entity) -> &mut Self;
-    
+
     fn despawn_part(&mut self, part: Entity) -> &mut Self;
 }
 
@@ -509,9 +511,10 @@ impl<'w, 's> PartCommandsExt<'w, 's> for Commands<'w, 's> {
         let mut commands = self.spawn();
         let mut bundle = PartBundle::new(part);
         bundle.custom_data.part_tree_root = Some(commands.id());
-        commands
-            .insert_bundle(bundle)
-            .insert_bundle((PartTreeRoot::default(), LockedAxes::TRANSLATION_LOCKED_Z | LockedAxes::ROTATION_LOCKED));
+        commands.insert_bundle(bundle).insert_bundle((
+            PartTreeRoot::default(),
+            LockedAxes::TRANSLATION_LOCKED_Z | LockedAxes::ROTATION_LOCKED,
+        ));
         commands
     }
 
@@ -593,9 +596,9 @@ impl<'w, 's> PartCommandsExt<'w, 's> for Commands<'w, 's> {
             joint.set_local_basis1(transform.rotation);
             transform.translation += entity_pos;
             world.entity_mut(part).insert_bundle((transform, ImpulseJoint::new(parent, joint), PartParent(parent), LockedAxes::TRANSLATION_LOCKED_Z)).remove::<PartTreeRoot>();
-            
+
             let mut entity = world.entity_mut(parent);
-            
+
             match entity.get_mut::<PartChildren>() {
                 Some(mut children) => match children.get_mut(hardpoint) {
                     Some(slot) => *slot = Some(part),
@@ -625,12 +628,13 @@ impl<'w, 's> PartCommandsExt<'w, 's> for Commands<'w, 's> {
                 let parent_id = parent.0;
                 drop(parent);
 
-                let mut parent = world.get_entity_mut(parent_id).unwrap();
-                if let Some(mut children) = parent.get_mut::<PartChildren>() {
-                    _ = children
-                        .iter()
-                        .position(|e| e.is_some() && e.unwrap() == part)
-                        .map(|idx| children[idx] = None)
+                if let Some(mut parent) = world.get_entity_mut(parent_id) {
+                    if let Some(mut children) = parent.get_mut::<PartChildren>() {
+                        _ = children
+                            .iter()
+                            .position(|e| e.is_some() && e.unwrap() == part)
+                            .map(|idx| children[idx] = None)
+                    }
                 }
             }
 
@@ -652,17 +656,25 @@ impl<'w, 's> PartCommandsExt<'w, 's> for Commands<'w, 's> {
                         next.remove::<EnemyOwned>();
                         next.get::<Children>()
                             .map(|children| children.iter().for_each(|&c| stack.push(c)));
-                        next.get_mut::<CustomPhysicsData>()
-                            .map(|mut physics| {
-                                physics.part_tree_root = Some(id); 
-                                physics.disable_collision = false; 
-                            });
+                        next.get_mut::<CustomPhysicsData>().map(|mut physics| {
+                            physics.part_tree_root = Some(id);
+                            physics.disable_collision = false;
+                        });
 
-                        next.get::<PartChildren>().unwrap().iter().filter_map(|&c| c).for_each(|c| stack.push(c));
+                        next.get::<PartChildren>()
+                            .unwrap()
+                            .iter()
+                            .filter_map(|&c| c)
+                            .for_each(|c| stack.push(c));
                     }
                 }
 
-                world.entity_mut(part).get_mut::<PartChildren>().unwrap().iter_mut().for_each(|c| *c = None);
+                world
+                    .entity_mut(part)
+                    .get_mut::<PartChildren>()
+                    .unwrap()
+                    .iter_mut()
+                    .for_each(|c| *c = None);
             }
 
             let id = part;
@@ -685,7 +697,7 @@ pub trait PartEntityCommandsExt<'w, 's> {
         &'c mut self,
         part: &Part,
         hardpoint: usize,
-        additional_comp: Option<impl Component>
+        additional_comp: Option<impl Component>,
     ) -> EntityCommands<'w, 's, 'c>;
 }
 
@@ -694,7 +706,7 @@ impl<'w, 's, 'a> PartEntityCommandsExt<'w, 's> for EntityCommands<'w, 's, 'a> {
         &'c mut self,
         part: &Part,
         hardpoint: usize,
-        additional_comp: Option<impl Component>
+        additional_comp: Option<impl Component>,
     ) -> EntityCommands<'w, 's, 'c> {
         let id = self.id();
         let mut part = self.commands().spawn_bundle(PartBundle::new(part));

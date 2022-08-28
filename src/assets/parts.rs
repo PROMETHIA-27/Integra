@@ -1,16 +1,17 @@
+use super::projectiles::*;
 use bevy::asset::{AssetLoader, LoadContext, LoadState, LoadedAsset};
 use bevy::ecs::system::EntityCommands;
-use bevy::math::vec2;
+use bevy::math::vec3;
 use bevy::prelude::*;
 use bevy::reflect::{FromReflect, TypeUuid};
 use bevy::render::renderer::RenderDevice;
 use bevy::render::texture::{CompressedImageFormats, ImageType};
-use bevy::sprite::Anchor;
-use bevy::utils::HashMap;
-use bevy_rapier3d::prelude::{ActiveHooks, Collider, ColliderMassProperties};
+use bevy::utils::{HashMap, Instant};
+use bevy_rapier3d::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::CustomPhysicsData;
+use crate::utils::UtilCommandExt;
+use crate::{CustomPhysicsData, PlayerOwned, EnemyOwned};
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Reflect, FromReflect)]
 pub enum Order {
@@ -32,6 +33,8 @@ pub struct Hardpoint {
 pub enum DefAnimation {
     #[serde(rename = "on move")]
     OnMove { idle: String, sequence: Vec<String> },
+    #[serde(rename = "on shoot")]
+    OnShoot { idle: String, sequence: Vec<String> },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Reflect, FromReflect)]
@@ -82,6 +85,17 @@ impl std::ops::AddAssign<PartStats> for PartStats {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, Reflect, FromReflect)]
+#[serde(tag = "type")]
+pub enum PartWeaponDef {
+    #[serde(rename = "projectile")]
+    Projectile {
+        spread: f32,
+        cooldown: f32,
+        projectile: WeaponProjectileDef,
+    },
+}
+
 #[derive(Component, Clone, Debug, Deserialize, Serialize, TypeUuid, Reflect, FromReflect)]
 #[uuid = "c3eda9f1-b731-4156-ae80-173056a0f25b"]
 pub struct PartDef {
@@ -93,14 +107,14 @@ pub struct PartDef {
     pub sprite: DefSprite,
     pub stats: PartStats,
     pub hardpoints: Vec<Hardpoint>,
+    pub weapon: Option<PartWeaponDef>,
 }
 
 impl PartDef {
     pub fn hardpoints(&self) -> impl Iterator<Item = (Vec2, Vec2, Order)> + '_ {
-        let origin: Vec2 = self.origin.into();
         self.hardpoints.iter().map(move |point| {
             (
-                Vec2::from(point.position) - origin,
+                Vec2::from(point.position),
                 Vec2::from(point.direction).normalize(),
                 point.order,
             )
@@ -111,6 +125,10 @@ impl PartDef {
 #[derive(Clone, Debug, Reflect, FromReflect)]
 pub enum PartAnimation {
     OnMove {
+        idle: Handle<Image>,
+        sequence: Vec<Handle<Image>>,
+    },
+    OnShoot {
         idle: Handle<Image>,
         sequence: Vec<Handle<Image>>,
     },
@@ -127,19 +145,30 @@ pub enum PartSprite {
     },
 }
 
+#[derive(Clone, Debug, Reflect, FromReflect)]
+pub enum PartWeapon {
+    Projectile {
+        spread: f32,
+        cooldown: f32,
+        last_shot: Instant,
+        projectile: WeaponProjectile,
+    },
+}
+
 #[derive(Clone, Debug, TypeUuid, Reflect, FromReflect)]
 #[uuid = "b87ec074-126b-4e1d-9e88-d5ca48e735ea"]
 pub struct Part {
     pub def: PartDef,
     pub sprite: PartSprite,
     pub size: (u32, u32),
+    pub weapon: Option<PartWeapon>,
 }
 
 #[derive(Clone, Component, Deref, DerefMut, Reflect, FromReflect)]
 pub struct PartChildren(Vec<Option<Entity>>);
 
 #[derive(Clone, Component, Deref, DerefMut, Reflect, FromReflect)]
-pub struct PartParent(Option<Entity>);
+pub struct PartParent(Entity);
 
 #[derive(Component, Clone, Default, Reflect, FromReflect)]
 #[reflect(Component)]
@@ -175,33 +204,49 @@ pub fn accumulate_part_stats(
     }
 }
 
+#[derive(Component, Clone, Debug, Reflect, FromReflect)]
+pub struct PartInfo {
+    pub weapon: Option<PartWeapon>,
+}
+
 #[derive(Bundle, Clone)]
 pub struct PartBundle {
     pub def: PartDef,
+    pub info: PartInfo,
     pub stats: PartStats,
     pub part_sprite: PartSprite,
     pub part_children: PartChildren,
-    pub part_parent: PartParent,
     pub image: Handle<Image>,
     pub sprite: Sprite,
     pub collider: Collider,
     pub(crate) custom_data: CustomPhysicsData,
     pub active_hooks: ActiveHooks,
     pub mass_properties: ColliderMassProperties,
+    pub transform: Transform,
+    pub global_transform: GlobalTransform,
+    pub visibility: Visibility,
+    pub computed_visibility: ComputedVisibility,
+    pub rigidbody: RigidBody,
+    pub gravity: GravityScale,
+    pub damping: Damping,
+    pub locked_axes: LockedAxes,
 }
 
 impl PartBundle {
     pub fn new(part: &Part) -> Self {
         let image = match &part.sprite {
             PartSprite::Basic(sprite) => sprite,
-            PartSprite::Animation {
-                anim: PartAnimation::OnMove { idle, .. },
-                ..
-            } => idle,
+            PartSprite::Animation { anim, .. } => match anim {
+                PartAnimation::OnMove { idle, .. } => idle,
+                PartAnimation::OnShoot { idle, .. } => idle,
+            },
         };
 
         Self {
             def: part.def.clone(),
+            info: PartInfo {
+                weapon: part.weapon.clone(),
+            },
             stats: part.def.stats.clone(),
             part_sprite: part.sprite.clone(),
             part_children: PartChildren(
@@ -209,21 +254,26 @@ impl PartBundle {
                     .take(part.def.hardpoints.len())
                     .collect(),
             ),
-            part_parent: PartParent(None),
             image: image.clone(),
-            sprite: Sprite {
-                anchor: Anchor::Custom(vec2(
-                    part.def.origin.0 / part.size.0 as f32,
-                    part.def.origin.1 / part.size.1 as f32,
-                )),
-                ..default()
-            },
+            sprite: Sprite::default(),
             collider: Collider::cuboid(part.size.0 as f32 / 2.0, part.size.1 as f32 / 2.0, 50.0),
             custom_data: CustomPhysicsData {
                 part_tree_root: None,
+                disable_collision: false,
             },
             active_hooks: ActiveHooks::FILTER_CONTACT_PAIRS,
             mass_properties: ColliderMassProperties::Mass(1.0),
+            transform: Transform::from_xyz(-part.def.origin.0, -part.def.origin.1, 0.0),
+            global_transform: default(),
+            visibility: default(),
+            computed_visibility: default(),
+            rigidbody: RigidBody::Dynamic,
+            gravity: GravityScale(0.0),
+            damping: Damping {
+                linear_damping: crate::DAMPING_FACTOR,
+                angular_damping: crate::DAMPING_FACTOR,
+            },
+            locked_axes: LockedAxes::TRANSLATION_LOCKED_Z
         }
     }
 }
@@ -273,6 +323,9 @@ impl AssetLoader for PartLoader {
                 DefSprite::Basic { path } => vec![path],
                 DefSprite::Animation { animation } => match animation {
                     DefAnimation::OnMove { idle, sequence } => {
+                        sequence.into_iter().chain([idle]).collect()
+                    }
+                    DefAnimation::OnShoot { idle, sequence } => {
                         sequence.into_iter().chain([idle]).collect()
                     }
                 },
@@ -331,14 +384,74 @@ impl AssetLoader for PartLoader {
                             anim: PartAnimation::OnMove { idle, sequence },
                         }
                     }
+                    DefAnimation::OnShoot { .. } => {
+                        let idle = sprites.pop().unwrap();
+                        let sequence = sprites;
+                        PartSprite::Animation {
+                            current: 0,
+                            rate: 5,
+                            timer: 0,
+                            anim: PartAnimation::OnShoot { idle, sequence },
+                        }
+                    }
                 },
+            };
+
+            let weapon = match &def.weapon {
+                Some(PartWeaponDef::Projectile {
+                    projectile,
+                    spread,
+                    cooldown,
+                }) => {
+                    let sprite = {
+                        let ext = std::path::Path::new(&projectile.sprite_path)
+                            .extension()
+                            .ok_or(bevy::asset::Error::msg("Sprite has invalid extension"))?
+                            .to_str()
+                            .ok_or(bevy::asset::Error::msg("Sprite has invalid extension"))?;
+                        let bytes = load_context
+                            .read_asset_bytes(&projectile.sprite_path)
+                            .await?;
+
+                        Image::from_buffer(
+                            &bytes,
+                            ImageType::Extension(ext),
+                            self.supported_compressed_formats,
+                            true,
+                        )?
+                    };
+
+                    let size = sprite.size().as_uvec2().into();
+
+                    let sprite =
+                        load_context.set_labeled_asset("projectile", LoadedAsset::new(sprite));
+
+                    Some(PartWeapon::Projectile {
+                        spread: *spread,
+                        cooldown: *cooldown,
+                        last_shot: Instant::now(),
+                        projectile: WeaponProjectile {
+                            sprite,
+                            size,
+                            damage: projectile.damage,
+                            velocity: projectile.velocity.unwrap_or_default(),
+                            acceleration: projectile.acceleration.unwrap_or_default(),
+                        },
+                    })
+                }
+                None => None,
             };
 
             info!("Part {} loaded", &def.name);
 
             let sprite_paths = sprite_paths.into_iter().cloned().collect::<Vec<_>>();
 
-            let mut asset = LoadedAsset::new(Part { def, sprite, size });
+            let mut asset = LoadedAsset::new(Part {
+                def,
+                sprite,
+                size,
+                weapon,
+            });
             for path in sprite_paths {
                 asset.add_dependency((&path).into());
             }
@@ -383,42 +496,28 @@ pub fn track_parts_loaded(
 
 pub trait PartCommandsExt<'w, 's> {
     fn spawn_part<'a>(&'a mut self, part: &Part) -> EntityCommands<'w, 's, 'a>;
+
+    fn attach_part(&mut self, parent: Entity, part: Entity, hardpoint: usize) -> &mut Self;
+
+    fn detach_part(&mut self, part: Entity) -> &mut Self;
+    
+    fn despawn_part(&mut self, part: Entity) -> &mut Self;
 }
 
 impl<'w, 's> PartCommandsExt<'w, 's> for Commands<'w, 's> {
     fn spawn_part<'a>(&'a mut self, part: &Part) -> EntityCommands<'w, 's, 'a> {
-        let mut commands = self.spawn_bundle(SpriteBundle::default());
+        let mut commands = self.spawn();
         let mut bundle = PartBundle::new(part);
         bundle.custom_data.part_tree_root = Some(commands.id());
         commands
             .insert_bundle(bundle)
-            .insert(PartTreeRoot::default());
+            .insert_bundle((PartTreeRoot::default(), LockedAxes::TRANSLATION_LOCKED_Z | LockedAxes::ROTATION_LOCKED));
         commands
     }
-}
 
-pub trait PartEntityCommandsExt<'w, 's> {
-    fn spawn_part_on_hardpoint<'c>(
-        &'c mut self,
-        part: &Part,
-        hardpoint: usize,
-    ) -> EntityCommands<'w, 's, 'c>;
-}
-
-impl<'w, 's, 'a> PartEntityCommandsExt<'w, 's> for EntityCommands<'w, 's, 'a> {
-    fn spawn_part_on_hardpoint<'c>(
-        &'c mut self,
-        part: &Part,
-        hardpoint: usize,
-    ) -> EntityCommands<'w, 's, 'c> {
-        let mut bundle = PartBundle::new(part);
-        let id = self.id();
-        *bundle.part_parent = Some(id);
-        let child = self.commands().spawn().id();
-        self.commands().add(move |world: &mut World| {
-            let mut bundle = bundle;
-
-            let entity = match world.get_entity(id) {
+    fn attach_part(&mut self, parent: Entity, part: Entity, hardpoint: usize) -> &mut Self {
+        self.add(move |world: &mut World| {
+            let entity = match world.get_entity(parent) {
                 Some(entity) => entity,
                 None => {
                     warn!("Failed to attach part to entity. Reason: Nonexistent entity.");
@@ -426,47 +525,80 @@ impl<'w, 's, 'a> PartEntityCommandsExt<'w, 's> for EntityCommands<'w, 's, 'a> {
                 },
             };
 
-            match entity.get::<CustomPhysicsData>() {
-                Some(&CustomPhysicsData { part_tree_root }) => bundle.custom_data.part_tree_root = part_tree_root,
-                None => warn!("Part being attached to does not have CustomPhysicsData. This may be an error."),
+            let part_tree_root = match entity.get::<CustomPhysicsData>() {
+                Some(&CustomPhysicsData { part_tree_root, .. }) => part_tree_root,
+                _ => {
+                    warn!("Failed to attach part to entity. Reason: Entity did not have CustomPhysicsData.");
+                    return;
+                },
             };
 
-            let (pos, dir, order) = match entity.get::<PartDef>() {
-                Some(part) => match part.hardpoints().nth(hardpoint) {
+            let (origin, (pos, dir, order)) = match entity.get::<PartDef>() {
+                Some(part) => (part.origin, match part.hardpoints().nth(hardpoint) {
                     Some(hardpoint) => hardpoint,
                     None => {
                         warn!("Failed to attach part to entity. Reason: Invalid hardpoint index {} in part {}.", hardpoint, part.name);
                         return;
                     },
-                },
+                }),
                 None => {
                     warn!("Failed to attach part to entity. Reason: Entity not a part.");
                     return;
                 },
             };
             let z = match order {
-                Order::Above => 1.0,
-                Order::Below => 0.0,
+                Order::Above => 0.1,
+                Order::Below => -0.1,
             };
 
-            let bundle_dir = bundle.def.direction.into();
-            let mut rot = Quat::from_rotation_arc_2d(bundle_dir, dir);
-            if bundle.def.stay_upright.unwrap_or_default()
-                && bundle_dir.angle_between(dir) > 90.0f32.to_radians()
+            let ownership = if entity.contains::<PlayerOwned>() {
+                1
+            } else if entity.contains::<EnemyOwned>() {
+                2
+            } else {
+                0
+            };
+
+            let entity_pos = entity.get::<Transform>().unwrap().translation;
+
+            let mut stack = vec![part];
+            while !stack.is_empty() {
+                let next = stack.pop().unwrap();
+                let mut next = world.entity_mut(next);
+
+                if ownership == 1 {
+                    next.insert(PlayerOwned);
+                } else if ownership == 2 {
+                    next.insert(EnemyOwned);
+                }
+
+                next.get_mut::<CustomPhysicsData>().unwrap().part_tree_root = part_tree_root;
+            }
+
+            let def = world.entity(part).get::<PartDef>().unwrap();
+            let part_dir = def.direction.into();
+            let mut rot = Quat::from_rotation_arc_2d(part_dir, dir);
+            if def.stay_upright.unwrap_or_default()
+                && part_dir.angle_between(dir) > 90.0f32.to_radians()
             {
                 rot = Quat::from_axis_angle(Vec3::X, 180.0f32.to_radians()) * rot;
             }
 
-            world.entity_mut(child).insert_bundle(SpriteBundle {
-                transform: Transform::from_xyz(pos.x, pos.y, z).with_rotation(rot),
-                ..default()
-            }).insert_bundle(bundle);
-
-            let mut entity = world.entity_mut(id);
-
+            let mut transform = Transform::from_xyz(pos.x - def.origin.0, pos.y - def.origin.1, z);
+            let origin = def.origin;
+            transform.rotate_around(transform.translation + Vec2::from(origin).extend(0.0), rot);
+            let mut joint = FixedJoint::new();
+            joint.set_contacts_enabled(false);
+            joint.set_local_anchor1(transform.translation);
+            joint.set_local_basis1(transform.rotation);
+            transform.translation += entity_pos;
+            world.entity_mut(part).insert_bundle((transform, ImpulseJoint::new(parent, joint), PartParent(parent), LockedAxes::TRANSLATION_LOCKED_Z)).remove::<PartTreeRoot>();
+            
+            let mut entity = world.entity_mut(parent);
+            
             match entity.get_mut::<PartChildren>() {
                 Some(mut children) => match children.get_mut(hardpoint) {
-                    Some(slot) => *slot = Some(child),
+                    Some(slot) => *slot = Some(part),
                     None => {
                         warn!("Failed to add part to PartChildren. Reason: PartChildren not as long as hardpoint list.");
                         return;
@@ -477,9 +609,101 @@ impl<'w, 's, 'a> PartEntityCommandsExt<'w, 's> for EntityCommands<'w, 's, 'a> {
                     return;
                 },
             }
-
-            entity.push_children(&[child]);
         });
-        self.commands().entity(child)
+
+        self
+    }
+
+    fn detach_part(&mut self, part: Entity) -> &mut Self {
+        self.add(move |world: &mut World| {
+            let entity = match world.get_entity(part) {
+                Some(e) => e,
+                None => return,
+            };
+
+            if let Some(parent) = entity.get::<PartParent>() {
+                let parent_id = parent.0;
+                drop(parent);
+
+                let mut parent = world.get_entity_mut(parent_id).unwrap();
+                if let Some(mut children) = parent.get_mut::<PartChildren>() {
+                    _ = children
+                        .iter()
+                        .position(|e| e.is_some() && e.unwrap() == part)
+                        .map(|idx| children[idx] = None)
+                }
+            }
+
+            if let Some(children) = world.entity(part).get::<PartChildren>() {
+                let children: Vec<Entity> = children.iter().filter_map(|&c| c).collect();
+                let mut stack = vec![];
+                for child in children {
+                    let mut child = world.entity_mut(child);
+                    child.remove::<PartParent>();
+                    child.remove::<ImpulseJoint>();
+                    child.insert(LockedAxes::TRANSLATION_LOCKED_Z | LockedAxes::ROTATION_LOCKED);
+                    let id = child.id();
+                    stack.clear();
+                    stack.push(id);
+                    while !stack.is_empty() {
+                        let next = stack.pop().unwrap();
+                        let mut next = world.entity_mut(next);
+                        next.remove::<PlayerOwned>();
+                        next.remove::<EnemyOwned>();
+                        next.get::<Children>()
+                            .map(|children| children.iter().for_each(|&c| stack.push(c)));
+                        next.get_mut::<CustomPhysicsData>()
+                            .map(|mut physics| {
+                                physics.part_tree_root = Some(id); 
+                                physics.disable_collision = false; 
+                            });
+
+                        next.get::<PartChildren>().unwrap().iter().filter_map(|&c| c).for_each(|c| stack.push(c));
+                    }
+                }
+
+                world.entity_mut(part).get_mut::<PartChildren>().unwrap().iter_mut().for_each(|c| *c = None);
+            }
+
+            let id = part;
+            let mut part = world.entity_mut(id);
+            part.remove::<ImpulseJoint>();
+            part.get_mut::<CustomPhysicsData>().unwrap().part_tree_root = None;
+        });
+        self
+    }
+
+    fn despawn_part(&mut self, part: Entity) -> &mut Self {
+        self.detach_part(part).entity(part).despawn();
+
+        self
+    }
+}
+
+pub trait PartEntityCommandsExt<'w, 's> {
+    fn spawn_part_on_hardpoint<'c>(
+        &'c mut self,
+        part: &Part,
+        hardpoint: usize,
+        additional_comp: Option<impl Component>
+    ) -> EntityCommands<'w, 's, 'c>;
+}
+
+impl<'w, 's, 'a> PartEntityCommandsExt<'w, 's> for EntityCommands<'w, 's, 'a> {
+    fn spawn_part_on_hardpoint<'c>(
+        &'c mut self,
+        part: &Part,
+        hardpoint: usize,
+        additional_comp: Option<impl Component>
+    ) -> EntityCommands<'w, 's, 'c> {
+        let id = self.id();
+        let mut part = self.commands().spawn_bundle(PartBundle::new(part));
+        if let Some(comp) = additional_comp {
+            part.insert(comp);
+        }
+        let part = part.id();
+        self.commands().attach_part(id, part, hardpoint);
+
+        self.commands().entity(part)
     }
 }

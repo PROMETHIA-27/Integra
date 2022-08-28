@@ -1,4 +1,4 @@
-use bevy::ecs::system::EntityCommands;
+use bevy::ecs::system::{CommandQueue, EntityCommands};
 use bevy::prelude::*;
 
 pub struct UtilPlugin;
@@ -25,6 +25,8 @@ struct MarkerPool(Vec<Entity>);
 
 pub trait UtilCommandExt {
     fn spawn_marker(&mut self, x: f32, y: f32) -> &mut Self;
+
+    fn despawn_and_update_hierarchy(&mut self, entity: Entity) -> &mut Self;
 }
 
 impl<'w, 's> UtilCommandExt for Commands<'w, 's> {
@@ -40,6 +42,31 @@ impl<'w, 's> UtilCommandExt for Commands<'w, 's> {
                 })
                 .insert(Marker);
         });
+        self
+    }
+
+    fn despawn_and_update_hierarchy(&mut self, entity: Entity) -> &mut Self {
+        self.add(move |world: &mut World| {
+            if let Some(entity_ref) = world.get_entity(entity) {
+                let children = entity_ref
+                    .get::<Children>()
+                    .map(|c| c.iter().cloned().collect())
+                    .unwrap_or_else(|| vec![]);
+
+                let parent = entity_ref.get::<Parent>().map(|p| p.get());
+
+                let mut queue = CommandQueue::default();
+                let mut c = Commands::new(&mut queue, world);
+                c.entity(entity).remove_children(&children[..]);
+                parent.map(|parent| {
+                    c.entity(parent).remove_children(&[entity]);
+                });
+                queue.apply(world);
+
+                world.despawn(entity);
+            }
+        });
+
         self
     }
 }

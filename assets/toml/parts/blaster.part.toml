@@ -8,10 +8,12 @@ hp = 75
 
 [weapon]
 type = "projectile"
-damage = 25
+spread = 30.0
+cooldown = 0.15
 
 [weapon.projectile]
 sprite_path = "png/parts/blastershot.png"
+damage = 5
 velocity = 500.0
 
 [sprite]

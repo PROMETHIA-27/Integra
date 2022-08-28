@@ -6,9 +6,9 @@ hardpoints = []
 
 [stats]
 hp = 35
-speed = 15
+speed = 30
 acceleration = 25
-force = 15
+force = 25
 
 [sprite]
 type = "animation"
